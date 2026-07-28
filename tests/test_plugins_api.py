@@ -316,6 +316,14 @@ class TestAIText:
                 mock_device_config
             )
 
+    def test_missing_deepseek_key(self, plugin, mock_device_config):
+        mock_device_config.load_env_key.return_value = None
+        with pytest.raises(RuntimeError, match="DeepSeek API Key"):
+            plugin.generate_image(
+                {"textPrompt": "Tell me a joke", "provider": "deepseek"},
+                mock_device_config
+            )
+
     def test_render_pil(self, plugin):
         img = plugin._render_pil((800, 480), "Daily Joke", "Why did the chicken cross the road?", {})
         assert_valid_image(img, (800, 480))
@@ -349,6 +357,14 @@ class TestAIImage:
         with pytest.raises(RuntimeError, match="Google Gemini API Key"):
             plugin.generate_image(
                 {"textPrompt": "A sunset", "provider": "gemini"},
+                mock_device_config
+            )
+
+    def test_missing_siliconflow_key(self, plugin, mock_device_config):
+        mock_device_config.load_env_key.return_value = None
+        with pytest.raises(RuntimeError, match="SiliconFlow API Key"):
+            plugin.generate_image(
+                {"textPrompt": "A sunset", "provider": "siliconflow"},
                 mock_device_config
             )
 

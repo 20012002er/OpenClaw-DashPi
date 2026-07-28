@@ -10,6 +10,7 @@
         <select id="provider" name="provider" class="form-input" onchange="toggleProviderOptions()">
             <option value="gemini">Google Gemini</option>
             <option value="openai">OpenAI (GPT)</option>
+            <option value="deepseek">DeepSeek</option>
         </select>
     </div>
 
@@ -37,6 +38,15 @@
             <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
         </select>
     </div>
+
+    <!-- DeepSeek Text Model Dropdown -->
+    <div id="deepseekOptions" class="form-group nowrap" style="display: none;">
+        <label for="deepseekTextModel" class="form-label">Text Model:</label>
+        <select id="deepseekTextModel" name="deepseekTextModel" class="form-input">
+            <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+            <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+        </select>
+    </div>
 </div>
 
 <div class="form-group">
@@ -49,13 +59,18 @@
         const provider = document.getElementById("provider").value;
         const openaiOptions = document.getElementById("openaiOptions");
         const geminiOptions = document.getElementById("geminiOptions");
+        const deepseekOptions = document.getElementById("deepseekOptions");
+
+        openaiOptions.style.display = "none";
+        geminiOptions.style.display = "none";
+        deepseekOptions.style.display = "none";
 
         if (provider === "gemini") {
-            openaiOptions.style.display = "none";
             geminiOptions.style.display = "flex";
+        } else if (provider === "deepseek") {
+            deepseekOptions.style.display = "flex";
         } else {
             openaiOptions.style.display = "flex";
-            geminiOptions.style.display = "none";
         }
     }
 
@@ -65,6 +80,7 @@
         var provider = 'gemini';
         var textModel = 'gpt-4o-mini';
         var geminiTextModel = 'gemini-2.0-flash';
+        var deepseekTextModel = 'deepseek-v4-flash';
 
         if (loadPluginSettings) {
             // Populate text inputs
@@ -74,12 +90,14 @@
             provider = pluginSettings.provider || 'openai';
             textModel = pluginSettings.textModel || 'gpt-4o-mini';
             geminiTextModel = pluginSettings.geminiTextModel || 'gemini-1.5-flash';
+            deepseekTextModel = pluginSettings.deepseekTextModel || 'deepseek-v4-flash';
 
         }
 
         document.getElementById('provider').value = provider;
         document.getElementById('textModel').value = textModel;
         document.getElementById('geminiTextModel').value = geminiTextModel;
+        document.getElementById('deepseekTextModel').value = deepseekTextModel;
         toggleProviderOptions();
     });
 </script>

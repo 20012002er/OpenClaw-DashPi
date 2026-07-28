@@ -18,6 +18,11 @@ DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 GEMINI_TEXT_MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash"]
 DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 
+# DeepSeek models (OpenAI-compatible API at https://api.deepseek.com)
+DEEPSEEK_TEXT_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"]
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
 
 class AIText(BasePlugin):
     """Sends a prompt to an AI model and renders the generated text on the display."""
@@ -26,8 +31,8 @@ class AIText(BasePlugin):
         template_params = super().generate_settings_template()
         template_params['api_key'] = {
             "required": False,
-            "service": "OpenAI or Google Gemini",
-            "expected_key": "OPEN_AI_SECRET or GOOGLE_GEMINI_SECRET"
+            "service": "OpenAI, Google Gemini, or DeepSeek",
+            "expected_key": "OPEN_AI_SECRET, GOOGLE_GEMINI_SECRET, or DEEPSEEK_SECRET"
         }
         template_params['style_settings'] = True
         return template_params
@@ -55,6 +60,8 @@ class AIText(BasePlugin):
 
         if provider == "gemini":
             prompt_response = self._generate_with_gemini(settings, device_config, text_prompt)
+        elif provider == "deepseek":
+            prompt_response = self._generate_with_deepseek(settings, device_config, text_prompt)
         else:
             prompt_response = self._generate_with_openai(settings, device_config, text_prompt)
 
@@ -223,6 +230,46 @@ class AIText(BasePlugin):
                 raise RuntimeError("Gemini model not found. Please select a different model.")
             else:
                 raise RuntimeError(f"Gemini error: {error_msg[:100]}")
+
+    def _generate_with_deepseek(self, settings, device_config, text_prompt):
+        """Generate text using DeepSeek via its OpenAI-compatible API.
+
+        DeepSeek's API uses the OpenAI SDK wire format; only base_url differs.
+        See: https://api-docs.deepseek.com/
+        """
+        from openai import OpenAI
+
+        api_key = device_config.load_env_key("DEEPSEEK_SECRET")
+        if not api_key:
+            raise RuntimeError("DeepSeek API Key not configured. Add DEEPSEEK_SECRET in Settings > API Keys.")
+
+        # Sanitize API key
+        api_key = api_key.encode('ascii', errors='ignore').decode('ascii').strip()
+
+        text_model = settings.get('deepseekTextModel', DEFAULT_DEEPSEEK_MODEL)
+        if text_model not in DEEPSEEK_TEXT_MODELS:
+            logger.warning(f"Unknown DeepSeek model: {text_model}, using anyway")
+
+        logger.info(f"DeepSeek Settings: model={text_model}")
+
+        try:
+            # DeepSeek accepts the OpenAI SDK with a custom base_url.
+            ai_client = OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+            return self._fetch_openai_text(ai_client, text_model, text_prompt)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Failed to make DeepSeek request: {error_msg}")
+
+            if "429" in error_msg:
+                raise RuntimeError("DeepSeek rate limit reached. Please wait a minute and try again.")
+            elif "401" in error_msg or "API_KEY" in error_msg.upper():
+                raise RuntimeError("DeepSeek API key is invalid. Please check your DEEPSEEK_SECRET in Settings > API Keys.")
+            elif "404" in error_msg:
+                raise RuntimeError("DeepSeek model not found. Please select a different model.")
+            else:
+                raise RuntimeError(f"DeepSeek error: {error_msg[:100]}")
 
     def _fetch_openai_text(self, ai_client, model, text_prompt):
         """Fetch text response from OpenAI."""

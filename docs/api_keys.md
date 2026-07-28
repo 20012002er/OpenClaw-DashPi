@@ -30,6 +30,17 @@ Required for the AI Image and AI Text Plugins
     OPEN_AI_SECRET=your-key
     ```
 
+## DeepSeek Key
+
+Required for the AI Text Plugin (DeepSeek provider)
+
+- Login or create an account on the [DeepSeek platform](https://platform.deepseek.com/)
+- Create an API key from the API Keys page
+- Store your key in the .env file with the key `DEEPSEEK_SECRET`
+    ```
+    DEEPSEEK_SECRET=your-key
+    ```
+
 ## Open Weather Map Key
 
 Required for the Weather Plugin

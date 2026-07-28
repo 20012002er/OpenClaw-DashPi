@@ -4,6 +4,7 @@
     <select id="provider" name="provider" class="form-input" onchange="toggleProviderOptions()">
         <option value="gemini">Google Gemini</option>
         <option value="openai">OpenAI (DALL-E)</option>
+        <option value="siliconflow">SiliconFlow (Kolors)</option>
     </select>
 </div>
 
@@ -108,6 +109,16 @@
     </div>
 </div>
 
+<!-- SiliconFlow Options -->
+<div id="siliconflowOptions" class="form-group dropdown-container" style="display: none;">
+    <div class="form-group">
+        <label for="siliconflowImageModel" class="form-label">Image Model:</label>
+        <select id="siliconflowImageModel" name="siliconflowImageModel" class="form-input">
+            <option value="Kwai-Kolors/Kolors" selected>Kolors (Kwai-Kolors)</option>
+        </select>
+    </div>
+</div>
+
 <div class="form-group">
     <label for="showTitle" class="form-label">Show Prompt Title:</label>
     <div class="toggle-container">
@@ -131,13 +142,18 @@
         const provider = document.getElementById("provider").value;
         const openaiOptions = document.getElementById("openaiOptions");
         const geminiOptions = document.getElementById("geminiOptions");
+        const siliconflowOptions = document.getElementById("siliconflowOptions");
+
+        openaiOptions.style.display = "none";
+        geminiOptions.style.display = "none";
+        siliconflowOptions.style.display = "none";
 
         if (provider === "gemini") {
-            openaiOptions.style.display = "none";
             geminiOptions.style.display = "flex";
+        } else if (provider === "siliconflow") {
+            siliconflowOptions.style.display = "flex";
         } else {
             openaiOptions.style.display = "flex";
-            geminiOptions.style.display = "none";
         }
     }
 
@@ -202,6 +218,7 @@
         var imageModel = 'dall-e-3';
         var quality = 'standard';
         var geminiImageModel = 'imagen-4.0-generate-001';
+        var siliconflowImageModel = 'Kwai-Kolors/Kolors';
         var showTitle = true;
         var fitMode = 'fit';
         var promptSource = 'manual';
@@ -214,6 +231,7 @@
             imageModel = pluginSettings.imageModel || 'dall-e-3';
             quality = pluginSettings.quality || 'standard';
             geminiImageModel = pluginSettings.geminiImageModel || 'imagen-4.0-generate-001';
+            siliconflowImageModel = pluginSettings.siliconflowImageModel || 'Kwai-Kolors/Kolors';
             showTitle = pluginSettings.showTitle !== 'false';
             fitMode = pluginSettings.fitMode || 'fit';
             promptSource = pluginSettings.promptSource || 'manual';
@@ -232,6 +250,7 @@
         document.getElementById('promptSource').value = promptSource;
         document.getElementById('imageModel').value = imageModel;
         document.getElementById('geminiImageModel').value = geminiImageModel;
+        document.getElementById('siliconflowImageModel').value = siliconflowImageModel;
         document.getElementById('showTitle').checked = showTitle;
         document.getElementById('fitMode').value = fitMode;
         toggleProviderOptions();

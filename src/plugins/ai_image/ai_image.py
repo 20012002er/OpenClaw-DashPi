@@ -31,6 +31,13 @@ GEMINI_NATIVE_MODELS = ["gemini-2.5-flash-image", "gemini-3-pro-image-preview", 
 GEMINI_IMAGE_MODELS = GEMINI_IMAGEN_MODELS + GEMINI_NATIVE_MODELS
 DEFAULT_GEMINI_MODEL = "imagen-4.0-generate-001"
 
+# SiliconFlow models (Kwai-Kolors/Kolors via SiliconFlow)
+SILICONFLOW_IMAGE_MODELS = ["Kwai-Kolors/Kolors"]
+DEFAULT_SILICONFLOW_MODEL = "Kwai-Kolors/Kolors"
+SILICONFLOW_TEXT_MODEL = "Qwen/Qwen3-32B"
+SILICONFLOW_IMAGE_API = "https://api.siliconflow.cn/v1/images/generations"
+SILICONFLOW_CHAT_API = "https://api.siliconflow.cn/v1/chat/completions"
+
 
 class AIImage(BasePlugin):
     def generate_settings_template(self):
@@ -38,8 +45,8 @@ class AIImage(BasePlugin):
         # Don't require a specific key - user chooses provider
         template_params['api_key'] = {
             "required": False,
-            "service": "OpenAI or Google Gemini",
-            "expected_key": "OPEN_AI_SECRET or GOOGLE_GEMINI_SECRET"
+            "service": "OpenAI, Google Gemini, or SiliconFlow",
+            "expected_key": "OPEN_AI_SECRET, GOOGLE_GEMINI_SECRET, or SILICONFLOW_SECRET"
         }
         return template_params
 
@@ -72,6 +79,8 @@ class AIImage(BasePlugin):
         is_news = prompt_source == "news"
         if provider == "gemini":
             image, final_prompt = self._generate_with_gemini(settings, device_config, text_prompt, randomize_prompt, orientation, is_news)
+        elif provider == "siliconflow":
+            image, final_prompt = self._generate_with_siliconflow(settings, device_config, text_prompt, randomize_prompt, orientation, is_news)
         else:
             image, final_prompt = self._generate_with_openai(settings, device_config, text_prompt, randomize_prompt, orientation, is_news)
 
@@ -351,6 +360,164 @@ class AIImage(BasePlugin):
                 raise RuntimeError("Gemini model not found. Please select a different model.")
             else:
                 raise RuntimeError(f"Gemini error: {error_msg[:100]}")
+
+    def _generate_with_siliconflow(self, settings, device_config, text_prompt, randomize_prompt, orientation, is_news=False):
+        """Generate image using SiliconFlow (Kwai-Kolors/Kolors).
+
+        Uses SiliconFlow's OpenAI-compatible REST API:
+        - POST /v1/images/generations for image generation (returns image URL).
+        - POST /v1/chat/completions for prompt randomization (text model).
+        """
+        api_key = device_config.load_env_key("SILICONFLOW_SECRET")
+        if not api_key:
+            logger.error("SiliconFlow API Key not configured")
+            raise RuntimeError("SiliconFlow API Key not configured. Add SILICONFLOW_SECRET in Settings > API Keys.")
+
+        # Sanitize API key
+        api_key = api_key.encode('ascii', errors='ignore').decode('ascii').strip()
+
+        image_model = settings.get('siliconflowImageModel', DEFAULT_SILICONFLOW_MODEL)
+        if image_model not in SILICONFLOW_IMAGE_MODELS:
+            logger.error(f"Invalid SiliconFlow image model: {image_model}")
+            raise RuntimeError("Invalid Image Model provided.")
+
+        logger.info(f"SiliconFlow Settings: model={image_model}")
+
+        session = get_http_session()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            if randomize_prompt:
+                logger.debug("Generating randomized prompt using SiliconFlow chat...")
+                text_prompt = self._fetch_siliconflow_prompt(session, headers, text_prompt, is_news)
+                logger.info(f"Randomized prompt: '{text_prompt}'")
+
+            enhanced_prompt = text_prompt + (
+                ". The image should fully occupy the entire canvas without any frames, "
+                "borders, or cropped areas. No blank spaces or artificial framing."
+            )
+
+            # Map orientation to a Kolors-supported resolution.
+            # Kolors recommended: 1024x1024, 960x1280, 768x1024, 720x1440, 720x1280.
+            if orientation == "horizontal":
+                image_size = "1280x720"
+            else:
+                image_size = "720x1280"
+
+            logger.info(f"Generating image with SiliconFlow {image_model} (size={image_size})...")
+
+            payload = {
+                "model": image_model,
+                "prompt": enhanced_prompt,
+                "image_size": image_size,
+                "batch_size": 1,
+                "num_inference_steps": 20,
+                "guidance_scale": 7.5,
+            }
+
+            resp = session.post(SILICONFLOW_IMAGE_API, json=payload, headers=headers, timeout=60)
+            if resp.status_code != 200:
+                error_msg = resp.text[:200]
+                logger.error(f"SiliconFlow API error: {resp.status_code} - {error_msg}")
+                if resp.status_code == 401:
+                    raise RuntimeError("SiliconFlow API key is invalid. Check SILICONFLOW_SECRET in Settings > API Keys.")
+                elif resp.status_code == 429:
+                    raise RuntimeError("SiliconFlow rate limit reached. Please wait a minute and try again.")
+                else:
+                    raise RuntimeError(f"SiliconFlow request failed: {error_msg}")
+
+            data = resp.json()
+            images = data.get("images", [])
+            if not images:
+                raise RuntimeError("SiliconFlow returned no images")
+
+            image_url = images[0].get("url")
+            if not image_url:
+                raise RuntimeError("SiliconFlow returned no image URL")
+
+            # Download the generated image
+            img_resp = session.get(image_url, timeout=30)
+            img_resp.raise_for_status()
+            buf = BytesIO(img_resp.content)
+            img = Image.open(buf).copy()
+            buf.close()
+
+            return img, text_prompt
+
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to make SiliconFlow request: {str(e)}")
+            raise RuntimeError(f"SiliconFlow request failure, please check logs.")
+
+    def _fetch_siliconflow_prompt(self, session, headers, from_prompt=None, is_news=False):
+        """Generate a creative image prompt using SiliconFlow chat completions.
+
+        Falls back to the original prompt on any error so image generation can continue.
+        """
+        logger.info("Getting random image prompt from SiliconFlow...")
+
+        if from_prompt and from_prompt.strip() and is_news:
+            user_content = (
+                f'News headline: "{from_prompt}"\n'
+                "Create a vivid editorial illustration prompt for this headline. "
+                "Think bold, dramatic, evocative, symbolic imagery in editorial illustration style. "
+                "Focus on the emotion or human impact rather than politics or violence. "
+                "Use rich, vibrant colors. Avoid cliches like scales of justice or chess pieces. "
+                "Design for a single strong focal point with minimal background clutter. "
+                "Do not include any text or words in the image. Keep it 20 words or less. "
+                "Just provide the prompt, no explanation."
+            )
+        elif from_prompt and from_prompt.strip():
+            user_content = (
+                f'Take this image description: "{from_prompt}"\n'
+                "Rewrite it with more vivid detail (20 words max). Keep the original subject "
+                "but reimagine it in a randomly chosen visual style: photorealistic, watercolor, "
+                "oil painting, pencil sketch, cartoon, pixel art, anime, retro poster, charcoal, "
+                "ink wash, 3D render, etc. Add specific details like lighting, mood, or setting. "
+                "Do NOT default to surrealism. Just provide the prompt, no explanation."
+            )
+        else:
+            user_content = (
+                "Generate a single image prompt (20 words max). Randomly pick a visual style "
+                "from: photorealistic photo, watercolor, pencil sketch, oil painting, cartoon, "
+                "pixel art, vector art, charcoal, anime, retro poster, infrared photo, ink wash, "
+                "pastel, 3D render, woodcut, collage, stained glass, or crayon drawing.\n"
+                "Randomly pick a subject from: people, animals, landscapes, cityscapes, food, "
+                "sports, historical scenes, sci-fi, fantasy, everyday moments, architecture, "
+                "underwater, space, weather, vehicles, portraits, still life, or wildlife.\n"
+                "Do NOT default to surrealism, abstract, or Dali. Most prompts should depict "
+                "recognizable real-world or fictional scenes. Vary wildly each time.\n"
+                "Just output the prompt, nothing else."
+            )
+
+        payload = {
+            "model": SILICONFLOW_TEXT_MODEL,
+            "messages": [{"role": "user", "content": user_content}],
+            "temperature": 2.0,
+            "max_tokens": 100,
+        }
+
+        try:
+            resp = session.post(SILICONFLOW_CHAT_API, json=payload, headers=headers, timeout=30)
+            if resp.status_code != 200:
+                logger.warning(f"SiliconFlow prompt generation failed ({resp.status_code}), using original prompt")
+                return from_prompt or ""
+            data = resp.json()
+            prompt = data["choices"][0]["message"]["content"].strip()
+            # Hard cap: truncate to 25 words max to prevent oversized prompts
+            words = prompt.split()
+            if len(words) > 25:
+                prompt = ' '.join(words[:25])
+                logger.info(f"Truncated prompt from {len(words)} to 25 words")
+            logger.info(f"Generated random image prompt: {prompt}")
+            return prompt
+        except Exception as e:
+            logger.warning(f"SiliconFlow prompt generation error: {e}, using original prompt")
+            return from_prompt or ""
 
     def _fetch_openai_image(self, ai_client, prompt, model, quality, orientation):
         """Fetch image from OpenAI API."""
