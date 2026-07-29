@@ -2,13 +2,69 @@
 
 from plugins.base_plugin.base_plugin import BasePlugin
 from datetime import datetime
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from utils.app_utils import get_font
 from utils.text_utils import draw_multiline_text, measure_text_block, get_text_dimensions
 import logging
+import os
 import random
 
 logger = logging.getLogger(__name__)
+
+# System CJK font candidates (tried in order). The bundled Jost font only
+# covers Latin glyphs, so AI responses in Chinese/Japanese/Korean would
+# render as blank .notdef boxes. We fall back to the first available system
+# CJK font when the content contains CJK characters.
+#   macOS:    PingFang / STHeiti / Arial Unicode
+#   RPi/Linux: Noto CJK / WenQuanYi
+CJK_FONT_CANDIDATES = [
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/Library/Fonts/Arial Unicode.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+]
+
+
+def _contains_cjk(text):
+    """Return True if text contains any CJK (Han/Hiragana/Katakana/Hangul) character."""
+    for ch in text:
+        cp = ord(ch)
+        # CJK Unified Ideographs + extensions, Hiragana, Katakana,
+        # Hangul Syllables, CJK Compatibility Ideographs
+        if (0x4E00 <= cp <= 0x9FFF or 0x3040 <= cp <= 0x30FF
+                or 0xAC00 <= cp <= 0xD7AF or 0x3400 <= cp <= 0x4DBF
+                or 0xF900 <= cp <= 0xFAFF or 0xFF00 <= cp <= 0xFFEF):
+            return True
+    return False
+
+
+def _get_font_for_text(text, font_name, font_size, font_weight="normal"):
+    """Return a font that can render `text`.
+
+    Uses the bundled Jost (or other requested) font for Latin-only text.
+    When `text` contains CJK characters, tries to load a system CJK font so
+    glyphs render instead of blank boxes; falls back to the bundled font
+    (with a warning) if no CJK font is installed.
+    """
+    bundled = get_font(font_name, font_size, font_weight)
+    if not _contains_cjk(text):
+        return bundled
+    for path in CJK_FONT_CANDIDATES:
+        if os.path.isfile(path):
+            try:
+                return ImageFont.truetype(path, font_size)
+            except Exception as e:
+                logger.debug(f"Failed to load CJK font {path}: {e}")
+    logger.warning(
+        "Content contains CJK characters but no system CJK font was found. "
+        f"Install fonts-noto-cjk (or similar). Tried: {CJK_FONT_CANDIDATES}"
+    )
+    return bundled
 
 # OpenAI models
 OPENAI_TEXT_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-5", "gpt-5-mini", "gpt-5-nano"]
@@ -92,8 +148,8 @@ class AIText(BasePlugin):
         title_size = int(min(height * 0.08, width * 0.07))
         content_size = int(min(height * 0.055, width * 0.045))
 
-        title_font = get_font("Jost", title_size, "bold")
-        content_font = get_font("Jost", content_size)
+        title_font = _get_font_for_text(title, "Jost", title_size, "bold")
+        content_font = _get_font_for_text(content, "Jost", content_size)
 
         y_cursor = margin
 

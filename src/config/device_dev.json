@@ -44,13 +44,66 @@
         "active_loop": null
     },
     "refresh_info": {
-        "refresh_time": null,
-        "image_hash": null,
-        "refresh_type": null,
-        "plugin_id": null
+        "refresh_time": "2026-07-29T04:18:59.884741+00:00",
+        "image_hash": "210e7770",
+        "refresh_type": "Manual Update",
+        "plugin_id": "newspaper"
     },
     "device_name": "Mac-Studio",
     "plugin_last_settings_image_upload": {
         "imageFiles[]": []
+    },
+    "plugin_last_settings_ai_text": {
+        "title": "\u53e4\u8bd7",
+        "provider": "deepseek",
+        "textModel": "gpt-4o-mini",
+        "geminiTextModel": "gemini-2.0-flash",
+        "deepseekTextModel": "deepseek-v4-flash",
+        "textPrompt": "\u7ed9\u6211\u4e00\u9996\u5510\u4ee3\u76847\u8a00\u7edd\u53e5",
+        "selectedFrame": "None",
+        "topMargin": "",
+        "bottomMargin": "",
+        "leftMargin": "",
+        "rightMargin": "",
+        "backgroundColor": "#ffffff",
+        "textColor": "#000000"
+    },
+    "auto_refresh_tracking": {
+        "plugin_settings": {
+            "newspaperName": "China Daily",
+            "newspaperSlug": "chi_cd",
+            "locationSearch": "Beijing, China"
+        },
+        "last_display_time": "2026-07-29T04:18:59.884741+00:00",
+        "last_loop_rotation_time": null
+    },
+    "plugin_last_settings_newspaper": {
+        "newspaperName": "China Daily",
+        "newspaperSlug": "chi_cd",
+        "locationSearch": "Beijing, China"
+    },
+    "inverted_image": null,
+    "log_system_stats": null,
+    "show_plugin_icon": null,
+    "timezone": "Asia/Shanghai",
+    "time_format": "12h",
+    "image_settings": {
+        "saturation": 1.0,
+        "sharpness": 1.0,
+        "contrast": 1.0
+    },
+    "brightness_schedule": {
+        "enabled": false,
+        "day_brightness": 1.0,
+        "evening_brightness": 0.6,
+        "night_brightness": 0.3,
+        "day_start": "07:00",
+        "evening_start": "18:00",
+        "night_start": "22:00"
+    },
+    "display_transitions": {
+        "enabled": false,
+        "steps": 10,
+        "duration_ms": 800
     }
 }
