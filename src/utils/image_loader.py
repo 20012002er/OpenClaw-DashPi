@@ -23,7 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_url(url):
-    """Validate a URL to prevent SSRF attacks. Blocks private/loopback IPs."""
+    """Validate a URL to prevent SSRF attacks.
+
+    DashPi is a self-hosted device that commonly accesses co-located services
+    (e.g. Immich on the same Pi). Loopback and private IPs are therefore
+    allowed; only link-local and reserved ranges are blocked.
+    """
     parsed = urlparse(url)
     if parsed.scheme not in ('http', 'https'):
         raise ValueError(f"URL scheme '{parsed.scheme}' not allowed")
@@ -35,7 +40,7 @@ def _validate_url(url):
         resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         for family, _, _, _, sockaddr in resolved:
             ip = ipaddress.ip_address(sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            if ip.is_link_local or ip.is_reserved:
                 raise ValueError(f"URL resolves to blocked address: {ip}")
     except socket.gaierror:
         raise ValueError(f"Cannot resolve hostname: {hostname}")

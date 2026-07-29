@@ -63,6 +63,11 @@ class LcdDisplay(AbstractDisplay):
 
         logger.info("Displaying image to LCD framebuffer.")
 
+        # Ensure framebuffer is unblanked before writing — on Pi 4 with fkms,
+        # fb0 may be left in FB_BLANK_POWERDOWN (4) after boot without a
+        # desktop session, which would prevent the written image from showing.
+        self.unblank_display()
+
         if self.bpp == 32:
             fb_bytes = self._convert_bgra(image)
         elif self.bpp == 16:
