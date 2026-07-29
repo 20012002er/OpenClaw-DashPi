@@ -106,6 +106,11 @@ def save_settings():
                 "steps": 10,
                 "duration_ms": 800,
             },
+            "proxy": {
+                "enabled": "proxyEnabled" in form_data,
+                "host": form_data.get("proxyHost", "").strip(),
+                "port": form_data.get("proxyPort", "").strip(),
+            },
         }
         # Remove None device_name to keep existing value
         if settings["device_name"] is None:

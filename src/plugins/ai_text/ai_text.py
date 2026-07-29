@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # render as blank .notdef boxes. We fall back to the first available system
 # CJK font when the content contains CJK characters.
 #   macOS:    PingFang / STHeiti / Arial Unicode
-#   RPi/Linux: Noto CJK / WenQuanYi
+#   RPi/Linux: Noto CJK / WenQuanYi / Droid Sans Fallback (preinstalled on RPi OS)
 CJK_FONT_CANDIDATES = [
     "/System/Library/Fonts/PingFang.ttc",
     "/System/Library/Fonts/STHeiti Light.ttc",
@@ -27,6 +27,7 @@ CJK_FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
     "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
 ]
 
 

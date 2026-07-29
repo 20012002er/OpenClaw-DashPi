@@ -31,6 +31,42 @@ class Config:
         self.refresh_info = self.load_refresh_info()
         # Load .env once at startup
         load_dotenv(override=True)
+        # Apply proxy settings from config (overrides /etc/environment proxies)
+        self._apply_proxy_settings()
+
+    def _apply_proxy_settings(self):
+        """Apply proxy settings from device config to os.environ.
+
+        Reads the 'proxy' section from device.json. When enabled, sets
+        HTTP_PROXY/HTTPS_PROXY so all Python HTTP libraries (requests,
+        urllib3, openai SDK, etc.) route through the configured proxy.
+        When disabled, clears these variables so /etc/environment proxies
+        (e.g. from clash-for-linux) are NOT inherited.
+        """
+        proxy_cfg = self.config.get("proxy", {})
+        proxy_vars = [
+            "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+            "ALL_PROXY", "all_proxy",
+        ]
+        if proxy_cfg.get("enabled"):
+            host = (proxy_cfg.get("host") or "").strip()
+            port = (proxy_cfg.get("port") or "").strip()
+            if host and port:
+                proxy_url = f"http://{host}:{port}"
+                for var in proxy_vars:
+                    if "ALL" in var or "all" in var:
+                        os.environ[var] = f"socks5://{host}:{port}"
+                    else:
+                        os.environ[var] = proxy_url
+                # Keep local network traffic direct
+                os.environ["NO_PROXY"] = "127.0.0.1,localhost,::1,192.168.0.0/16,10.0.0.0/8"
+                os.environ["no_proxy"] = "127.0.0.1,localhost,::1,192.168.0.0/16,10.0.0.0/8"
+                logger.info(f"Proxy enabled: {proxy_url}")
+                return
+        # Proxy disabled — clear any inherited env proxies
+        for var in proxy_vars + ["NO_PROXY", "no_proxy"]:
+            os.environ.pop(var, None)
+        logger.info("Proxy disabled (all proxy env vars cleared)")
 
     def read_config(self):
         """Reads the device config JSON file and returns it as a dictionary."""
