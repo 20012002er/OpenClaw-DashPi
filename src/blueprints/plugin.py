@@ -477,3 +477,78 @@ def add_ticker():
     except Exception as e:
         logger.error(f"Error validating ticker {ticker}: {str(e)}")
         return jsonify({"error": f"Could not validate ticker '{ticker}'"}), 400
+
+
+# ---------------------------------------------------------------------------
+# Spotify Web Player plugin — kiosk start/stop, status, login state
+# ---------------------------------------------------------------------------
+
+def _get_spotify_plugin_instance():
+    """Return the singleton SpotifyWeb plugin instance, or None."""
+    from plugins.plugin_registry import PLUGIN_CLASSES
+    return PLUGIN_CLASSES.get("spotify_web")
+
+
+@plugin_bp.route('/plugin/spotify_web/start', methods=['POST'])
+def start_spotify_kiosk():
+    """Start the Chromium kiosk displaying the Spotify Web Player."""
+    plugin = _get_spotify_plugin_instance()
+    if plugin is None:
+        return jsonify({"error": "Spotify plugin not loaded"}), 500
+
+    try:
+        success, message = plugin.start_kiosk()
+        if success:
+            return jsonify({"success": True, "message": message})
+        return jsonify({"error": message}), 500
+    except Exception as e:
+        logger.exception("Error starting Spotify kiosk")
+        return jsonify({"error": str(e)}), 500
+
+
+@plugin_bp.route('/plugin/spotify_web/stop', methods=['POST'])
+def stop_spotify_kiosk():
+    """Stop the Chromium kiosk and restore framebuffer access."""
+    plugin = _get_spotify_plugin_instance()
+    if plugin is None:
+        return jsonify({"error": "Spotify plugin not loaded"}), 500
+
+    try:
+        success, message = plugin._stop_kiosk()
+        if success:
+            return jsonify({"success": True, "message": message})
+        return jsonify({"error": message}), 500
+    except Exception as e:
+        logger.exception("Error stopping Spotify kiosk")
+        return jsonify({"error": str(e)}), 500
+
+
+@plugin_bp.route('/plugin/spotify_web/status', methods=['GET'])
+def spotify_kiosk_status():
+    """Return whether the kiosk is currently running and whether the user
+    is already logged in (session cookies persisted in the profile).
+    """
+    plugin = _get_spotify_plugin_instance()
+    if plugin is None:
+        return jsonify({"running": False, "logged_in": False,
+                        "error": "plugin not loaded"})
+    return jsonify({
+        "running": plugin.is_running(),
+        "logged_in": plugin._has_persisted_session(),
+    })
+
+
+@plugin_bp.route('/plugin/spotify_web/reset_login', methods=['POST'])
+def reset_spotify_login():
+    """Clear the saved Spotify login (deletes the Chromium profile dir)."""
+    plugin = _get_spotify_plugin_instance()
+    if plugin is None:
+        return jsonify({"error": "Spotify plugin not loaded"}), 500
+    try:
+        success, message = plugin.reset_login()
+        if success:
+            return jsonify({"success": True, "message": message})
+        return jsonify({"error": message}), 400
+    except Exception as e:
+        logger.exception("Error resetting Spotify login")
+        return jsonify({"error": str(e)}), 500

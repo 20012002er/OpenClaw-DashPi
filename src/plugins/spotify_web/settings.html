@@ -1,0 +1,253 @@
+<div class="form-group">
+    <p class="form-help-text">
+        Display the Spotify Web Player on the 7" touchscreen. Audio is routed
+        to a connected Bluetooth device automatically.
+    </p>
+</div>
+
+<!-- Login Status -->
+<div class="form-group">
+    <label class="form-label">Spotify Account:</label>
+    <div id="spotifyLoginStatus" class="spotify-status-card">
+        <span id="spotifyLoginDot" class="spotify-status-dot checking"></span>
+        <span id="spotifyLoginText">Checking login state...</span>
+    </div>
+    <small class="form-help-text" id="spotifyLoginHint" style="display:none;">
+        On first launch, use the touchscreen to log in with your Google account:
+        tap "Continue with Google" and complete the OAuth flow. Your session
+        will be persisted automatically — no need to log in again on restart.
+    </small>
+</div>
+
+<div class="separator" style="margin: 16px 0;"></div>
+
+<!-- Player Controls -->
+<div class="form-group">
+    <label class="form-label">Web Player:</label>
+    <div id="spotifyPlayerStatus" class="spotify-status-card">
+        <span id="spotifyStatusDot" class="spotify-status-dot stopped"></span>
+        <span id="spotifyStatusText">Checking status...</span>
+    </div>
+    <div style="display:flex; gap:10px; margin-top:10px;">
+        <button type="button" id="spotifyStartBtn" onclick="startSpotifyPlayer()" class="action-button" style="background:#1db954;color:#fff;flex:1;">
+            Start Web Player
+        </button>
+        <button type="button" id="spotifyStopBtn" onclick="stopSpotifyPlayer()" class="action-button" style="background:#dc3545;color:#fff;flex:1;display:none;">
+            Stop Web Player
+        </button>
+    </div>
+</div>
+
+<div class="separator" style="margin: 16px 0;"></div>
+
+<!-- Bluetooth Audio Status -->
+<div class="form-group">
+    <label class="form-label">Bluetooth Audio:</label>
+    <div id="spotifyBtStatus" class="spotify-status-card">
+        <span class="spotify-status-dot checking"></span>
+        <span>Checking Bluetooth...</span>
+    </div>
+    <small class="form-help-text">
+        Connect a Bluetooth audio device in <a href="/bluetooth">Settings → Bluetooth</a> before starting the player.
+    </small>
+</div>
+
+<div class="separator" style="margin: 16px 0;"></div>
+
+<!-- Reset Login -->
+<div class="form-group">
+    <label class="form-label">Reset Login:</label>
+    <small class="form-help-text">
+        If you need to switch accounts or the session expired, clear the saved
+        login below. The next launch will show the Spotify login page again.
+    </small>
+    <button type="button" onclick="resetSpotifyLogin()" class="action-button" style="background:#6c757d;color:#fff;margin-top:6px;">
+        Clear Saved Login
+    </button>
+</div>
+
+<style>
+    .spotify-status-card {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        background: var(--input-bg, #3a3a3a);
+        border: 1px solid var(--border-color, #555);
+        border-radius: 8px;
+        font-size: 14px;
+    }
+    .spotify-status-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .spotify-status-dot.running,
+    .spotify-status-dot.logged-in,
+    .spotify-status-dot.connected {
+        background: #1db954;
+        box-shadow: 0 0 8px #1db954;
+    }
+    .spotify-status-dot.stopped,
+    .spotify-status-dot.logged-out {
+        background: #888;
+    }
+    .spotify-status-dot.checking {
+        background: #ffc107;
+        animation: pulse 1.2s infinite;
+    }
+    .spotify-status-dot.disconnected {
+        background: #dc3545;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+</style>
+
+<script>
+    async function updateSpotifyLoginStatus() {
+        try {
+            const r = await fetch('/plugin/spotify_web/status');
+            const data = await r.json();
+            const dot = document.getElementById('spotifyLoginDot');
+            const text = document.getElementById('spotifyLoginText');
+            const hint = document.getElementById('spotifyLoginHint');
+            if (data.logged_in) {
+                dot.className = 'spotify-status-dot logged-in';
+                text.textContent = 'Logged in — session will resume automatically';
+                hint.style.display = 'none';
+            } else {
+                dot.className = 'spotify-status-dot logged-out';
+                text.textContent = 'Not logged in — first launch will require manual login';
+                hint.style.display = 'block';
+            }
+        } catch (e) {
+            console.error('Error fetching Spotify login status:', e);
+        }
+    }
+
+    async function updateSpotifyPlayerStatus() {
+        try {
+            const r = await fetch('/plugin/spotify_web/status');
+            const data = await r.json();
+            const dot = document.getElementById('spotifyStatusDot');
+            const text = document.getElementById('spotifyStatusText');
+            const startBtn = document.getElementById('spotifyStartBtn');
+            const stopBtn = document.getElementById('spotifyStopBtn');
+            if (data.running) {
+                dot.className = 'spotify-status-dot running';
+                text.textContent = 'Running — Spotify Web Player is on the touchscreen';
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'block';
+            } else {
+                dot.className = 'spotify-status-dot stopped';
+                text.textContent = 'Stopped';
+                startBtn.style.display = 'block';
+                stopBtn.style.display = 'none';
+            }
+        } catch (e) {
+            console.error('Error polling Spotify status:', e);
+        }
+    }
+
+    async function startSpotifyPlayer() {
+        const btn = document.getElementById('spotifyStartBtn');
+        const original = btn.textContent;
+        btn.textContent = 'Starting...';
+        btn.disabled = true;
+        try {
+            const r = await fetch('/plugin/spotify_web/start', { method: 'POST' });
+            const data = await r.json();
+            if (r.ok) {
+                showResponseModal('success', 'Web Player started on touchscreen');
+            } else {
+                showResponseModal('failure', `Error: ${data.error}`);
+            }
+        } catch (e) {
+            showResponseModal('failure', 'Network error starting player');
+        } finally {
+            btn.textContent = original;
+            btn.disabled = false;
+            updateSpotifyPlayerStatus();
+            updateSpotifyLoginStatus();
+        }
+    }
+
+    async function stopSpotifyPlayer() {
+        const btn = document.getElementById('spotifyStopBtn');
+        const original = btn.textContent;
+        btn.textContent = 'Stopping...';
+        btn.disabled = true;
+        try {
+            const r = await fetch('/plugin/spotify_web/stop', { method: 'POST' });
+            const data = await r.json();
+            if (r.ok) {
+                showResponseModal('success', 'Web Player stopped');
+            } else {
+                showResponseModal('failure', `Error: ${data.error}`);
+            }
+        } catch (e) {
+            showResponseModal('failure', 'Network error stopping player');
+        } finally {
+            btn.textContent = original;
+            btn.disabled = false;
+            updateSpotifyPlayerStatus();
+        }
+    }
+
+    async function resetSpotifyLogin() {
+        if (!confirm('Clear saved Spotify login? The next launch will show the Spotify login page.')) return;
+        try {
+            // Clear by removing the persistent profile directory via a dedicated endpoint
+            const r = await fetch('/plugin/spotify_web/reset_login', { method: 'POST' });
+            const data = await r.json();
+            if (r.ok) {
+                showResponseModal('success', 'Saved login cleared');
+                updateSpotifyLoginStatus();
+            } else {
+                showResponseModal('failure', `Error: ${data.error}`);
+            }
+        } catch (e) {
+            showResponseModal('failure', 'Network error clearing login');
+        }
+    }
+
+    async function updateBluetoothStatus() {
+        const card = document.getElementById('spotifyBtStatus');
+        try {
+            const r = await fetch('/bluetooth/status');
+            const data = await r.json();
+            const dot = card.querySelector('.spotify-status-dot');
+            const text = card.querySelector('span:last-child');
+            const audioDevs = (data.connected || []).filter(d =>
+                d.icon === 'audio-card' || d.icon === 'audio-headset' ||
+                d.icon === 'headset' || d.icon === 'headphones'
+            );
+            if (audioDevs.length > 0) {
+                dot.className = 'spotify-status-dot connected';
+                text.textContent = `Connected: ${audioDevs.map(d => d.name).join(', ')}`;
+            } else if (data.powered) {
+                dot.className = 'spotify-status-dot disconnected';
+                text.textContent = 'No audio device connected';
+            } else {
+                dot.className = 'spotify-status-dot disconnected';
+                text.textContent = 'Bluetooth adapter off';
+            }
+        } catch (e) {
+            const dot = card.querySelector('.spotify-status-dot');
+            const text = card.querySelector('span:last-child');
+            dot.className = 'spotify-status-dot disconnected';
+            text.textContent = 'Bluetooth unavailable (dev mode)';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        updateSpotifyLoginStatus();
+        updateSpotifyPlayerStatus();
+        updateBluetoothStatus();
+        setInterval(updateSpotifyPlayerStatus, 5000);
+        setInterval(updateBluetoothStatus, 15000);
+    });
+</script>

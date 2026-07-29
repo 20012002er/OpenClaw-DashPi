@@ -182,3 +182,6 @@ mock_display_output/
 # Claude Code local settings
 .claude/
 CLAUDE.md
+
+# Spotify Web Player persistent profile (contains login cookies)
+/src/static/spotify_profile/

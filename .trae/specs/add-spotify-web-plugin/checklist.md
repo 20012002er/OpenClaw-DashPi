@@ -1,0 +1,19 @@
+- [x] `src/plugins/spotify_web/plugin-info.json` 存在且 `id` 为 `spotify_web`、`class` 为 `SpotifyWeb`
+- [x] `SpotifyWeb` 类继承 `BasePlugin` 并实现 `generate_image()` 返回 PIL 占位图
+- [x] `SpotifyWeb.cleanup()` 能终止 Chromium 与 Xorg 进程
+- [x] 插件设置页（settings.html）包含用户名输入框、密码输入框、保存按钮
+- [x] 密码保存到 `.env` 文件（`SPOTIFY_PASSWORD`），不在 API 响应中回显明文
+- [x] 用户名保存到 device config（`spotify_username`）
+- [x] `GET /plugin/spotify_web/credentials` 返回用户名与密码是否已设置（不返回密码明文）
+- [x] `POST /plugin/spotify_web/credentials` 保存凭据到 device config 与 .env
+- [x] `POST /plugin/spotify_web/start` 启动 Xorg + Chromium kiosk 进程
+- [x] `POST /plugin/spotify_web/stop` 终止 Chromium + Xorg 进程
+- [x] `GET /plugin/spotify_web/status` 返回播放器运行状态
+- [x] Chromium 使用持久化用户数据目录 `src/static/spotify_profile/`
+- [x] `src/static/spotify_profile/` 已加入 `.gitignore`
+- [x] Chromium 启动参数包含 `--kiosk`、`--autoplay-policy=no-user-gesture-required`
+- [x] 蓝牙音频设备已连接时，PulseAudio 默认 sink 设置为该设备
+- [x] 设置页显示蓝牙音频设备连接状态
+- [x] `install/debian-requirements.txt` 包含 chromium-browser、xserver-xorg、xinit
+- [x] 非树莓派环境（dev mode）下端点优雅降级，不崩溃
+- [x] 插件出现在 8080 后管首页的插件网格中

@@ -1,0 +1,5 @@
+{
+    "display_name": "Spotify Web Player",
+    "id": "spotify_web",
+    "class": "SpotifyWeb"
+}

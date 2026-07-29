@@ -16,3 +16,7 @@ libheif-dev
 jq
 bluez
 pi-bluetooth
+chromium-browser
+xserver-xorg
+xinit
+pulseaudio-module-bluetooth
