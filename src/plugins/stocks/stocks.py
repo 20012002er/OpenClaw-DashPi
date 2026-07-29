@@ -12,8 +12,6 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-# Timeout for yfinance API calls (seconds)
-YFINANCE_TIMEOUT = 15
 # Cache TTL: shorter when market open, longer when closed
 CACHE_TTL_MARKET_OPEN = 60
 CACHE_TTL_MARKET_CLOSED = 3600
@@ -46,6 +44,53 @@ def format_large_number(num):
 def format_price(value):
     """Format a price value or return N/A."""
     return f"${value:,.2f}" if value is not None else "N/A"
+
+
+# Exchange prefixes used by akshare's stock_us_hist (East Money coding).
+# 105=NASDAQ, 106=NYSE, 107=AMEX. We try each in order until one returns data.
+_US_EXCHANGE_PREFIXES = ["105", "106", "107"]
+
+
+def _fetch_us_hist_with_prefix(ak, symbol, start_date, end_date):
+    """Fetch US stock daily history, trying each exchange prefix.
+
+    akshare's stock_us_hist requires a full code like '105.AAPL' but the user
+    only provides the bare symbol 'AAPL'. We try each known prefix and return
+    the first non-empty DataFrame. Returns None if no prefix works.
+    """
+    for prefix in _US_EXCHANGE_PREFIXES:
+        full_code = f"{prefix}.{symbol}"
+        try:
+            hist = ak.stock_us_hist(
+                symbol=full_code, period="daily",
+                start_date=start_date, end_date=end_date, adjust="qfq",
+            )
+            if hist is not None and len(hist) > 0:
+                return hist
+        except Exception:
+            continue
+    return None
+
+
+def _fetch_us_stock_name(ak, symbol):
+    """Fetch the short display name for a US stock via Xueqiu data source.
+
+    Returns the Chinese short name (e.g. '苹果' for AAPL), falling back to
+    the English short name, or None if unavailable.
+    """
+    try:
+        info = ak.stock_individual_basic_info_us_xq(symbol=symbol)
+        # info is a 2-column DataFrame (item, value); find the name rows
+        items = dict(zip(info["item"], info["value"]))
+        return (
+            items.get("org_short_name_cn")
+            or items.get("org_short_name_en")
+            or items.get("org_name_cn")
+            or items.get("org_name_en")
+        )
+    except Exception as e:
+        logger.debug(f"Could not fetch name for {symbol}: {e}")
+        return None
 
 
 # NYSE market holidays by year
@@ -114,7 +159,7 @@ def is_market_open():
 
 
 class Stocks(BasePlugin):
-    """Stock ticker dashboard plugin using yfinance.
+    """Stock ticker dashboard plugin using akshare.
 
     Displays up to 6 stock tickers in a responsive grid layout. Each card shows
     the symbol, company name, current price, daily change (colored green/red),
@@ -141,7 +186,7 @@ class Stocks(BasePlugin):
         return template_params
 
     def generate_image(self, settings, device_config):
-        """Fetch stock data via yfinance and render ticker cards in a grid layout."""
+        """Fetch stock data via akshare and render ticker cards in a grid layout."""
         title = settings.get("title", "Stock Prices")
         tickers_input = settings.get("tickers", "")
 
@@ -385,14 +430,28 @@ class Stocks(BasePlugin):
         return image
 
     def fetch_stock_data(self, tickers):
-        """Fetch stock data for a list of ticker symbols using batch request.
+        """Fetch stock data for a list of ticker symbols using akshare.
 
-        Results are cached with a TTL that varies by market status (shorter when
-        open, longer when closed). yfinance calls are wrapped in a thread timeout
-        to prevent hanging the refresh loop.
+        Uses akshare (backed by East Money / Sina, accessible from mainland
+        China) instead of yfinance (Yahoo Finance, blocked in mainland China
+        since 2021).
+
+        For each ticker, fetches ~1 year of daily OHLCV history via
+        stock_us_hist() (~0.5s per ticker) and derives all display fields:
+          - current price  = latest day's close
+          - change / pct   = latest day's 涨跌额 / 涨跌幅
+          - day high/low   = latest day's 最高 / 最低
+          - 52W high/low   = max/min over the full history range
+          - volume         = latest day's 成交量
+
+        Stock names are fetched once per ticker via
+        stock_individual_basic_info_us_xq() and cached on the instance.
+
+        Results are cached with a TTL that varies by market status (shorter
+        when open, longer when closed).
         """
-        import yfinance as yf
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError
+        import akshare as ak
+        from datetime import datetime as _dt, timedelta as _td
 
         # Check cache
         now = time.monotonic()
@@ -404,57 +463,55 @@ class Stocks(BasePlugin):
             return self._stocks_cache
 
         stocks_data = []
+        end_date = _dt.now().strftime('%Y%m%d')
+        start_date = (_dt.now() - _td(days=365)).strftime('%Y%m%d')
 
-        try:
-            # Batch fetch all tickers at once
-            tickers_obj = yf.Tickers(" ".join(tickers))
+        # Ensure the per-instance name cache exists
+        if not hasattr(self, '_name_cache'):
+            self._name_cache = {}
 
-            for symbol in tickers:
-                try:
-                    # Wrap .info access in a timeout to prevent hanging
-                    with ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(lambda s=symbol: tickers_obj.tickers[s].info)
-                        info = future.result(timeout=YFINANCE_TIMEOUT)
-
-                    # Get current price and other data
-                    current_price = info.get("currentPrice") or info.get("regularMarketPrice")
-                    previous_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
-
-                    if current_price is None:
-                        logger.warning(f"Could not fetch price for {symbol}")
-                        continue
-
-                    # Calculate change
-                    change = 0
-                    change_percent = 0
-                    if previous_close and current_price:
-                        change = current_price - previous_close
-                        change_percent = (change / previous_close) * 100
-
-                    sign = "+" if change >= 0 else ""
-                    stocks_data.append({
-                        "symbol": symbol,
-                        "name": info.get("shortName") or info.get("longName") or symbol,
-                        "price_formatted": format_price(current_price),
-                        "change_formatted": f"{sign}{change:.2f}",
-                        "change_percent_formatted": f"{sign}{change_percent:.2f}%",
-                        "volume": format_large_number(info.get("volume") or info.get("regularMarketVolume")),
-                        "high_formatted": format_price(info.get("dayHigh") or info.get("regularMarketDayHigh")),
-                        "low_formatted": format_price(info.get("dayLow") or info.get("regularMarketDayLow")),
-                        "week52_high_formatted": format_price(info.get("fiftyTwoWeekHigh")),
-                        "week52_low_formatted": format_price(info.get("fiftyTwoWeekLow")),
-                        "is_positive": change >= 0
-                    })
-
-                except TimeoutError:
-                    logger.warning(f"Timeout fetching data for {symbol} after {YFINANCE_TIMEOUT}s")
-                    continue
-                except Exception as e:
-                    logger.error(f"Error processing data for {symbol}: {str(e)}")
+        for symbol in tickers:
+            try:
+                hist = _fetch_us_hist_with_prefix(ak, symbol, start_date, end_date)
+                if hist is None or len(hist) == 0:
+                    logger.warning(f"Could not fetch history for '{symbol}'")
                     continue
 
-        except Exception as e:
-            logger.error(f"Error fetching stock data: {str(e)}")
+                last = hist.iloc[-1]
+                current_price = float(last['收盘'])
+                change = float(last.get('涨跌额') or 0)
+                change_percent = float(last.get('涨跌幅') or 0)
+                day_high = last.get('最高')
+                day_low = last.get('最低')
+                volume = last.get('成交量')
+
+                week52_high = float(hist['最高'].max()) if len(hist) > 0 else None
+                week52_low = float(hist['最低'].min()) if len(hist) > 0 else None
+
+                # Fetch display name (cached per-instance to avoid repeat calls)
+                name = self._name_cache.get(symbol)
+                if not name:
+                    name = _fetch_us_stock_name(ak, symbol) or symbol
+                    self._name_cache[symbol] = name
+
+                sign = "+" if change >= 0 else ""
+                stocks_data.append({
+                    "symbol": symbol,
+                    "name": name,
+                    "price_formatted": format_price(current_price),
+                    "change_formatted": f"{sign}{change:.2f}",
+                    "change_percent_formatted": f"{sign}{change_percent:.2f}%",
+                    "volume": format_large_number(volume),
+                    "high_formatted": format_price(day_high),
+                    "low_formatted": format_price(day_low),
+                    "week52_high_formatted": format_price(week52_high),
+                    "week52_low_formatted": format_price(week52_low),
+                    "is_positive": change >= 0
+                })
+
+            except Exception as e:
+                logger.error(f"Error processing data for {symbol}: {str(e)}")
+                continue
 
         # Update cache
         if stocks_data:

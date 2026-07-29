@@ -44,10 +44,10 @@
         "active_loop": null
     },
     "refresh_info": {
-        "refresh_time": "2026-07-29T04:18:59.884741+00:00",
-        "image_hash": "210e7770",
+        "refresh_time": "2026-07-29T15:38:52.325448+08:00",
+        "image_hash": "63650aa9",
         "refresh_type": "Manual Update",
-        "plugin_id": "newspaper"
+        "plugin_id": "stocks"
     },
     "device_name": "Mac-Studio",
     "plugin_last_settings_image_upload": {
@@ -70,11 +70,14 @@
     },
     "auto_refresh_tracking": {
         "plugin_settings": {
-            "newspaperName": "China Daily",
-            "newspaperSlug": "chi_cd",
-            "locationSearch": "Beijing, China"
+            "title": "",
+            "tickers": "",
+            "fontSize": "normal",
+            "darkMode": "off",
+            "autoRefresh": "0",
+            "reduceWhenClosed": "false"
         },
-        "last_display_time": "2026-07-29T04:18:59.884741+00:00",
+        "last_display_time": "2026-07-29T15:38:52.325448+08:00",
         "last_loop_rotation_time": null
     },
     "plugin_last_settings_newspaper": {
@@ -105,5 +108,44 @@
         "enabled": false,
         "steps": 10,
         "duration_ms": 800
+    },
+    "plugin_last_settings_apod": {
+        "autoRefresh": "60",
+        "customDate": "2026-07-29",
+        "fitMode": "fit"
+    },
+    "plugin_last_settings_unsplash": {
+        "autoRefresh": "30",
+        "search_query": "cloud",
+        "collections": "",
+        "content_filter": "low",
+        "fitMode": "fit",
+        "color": "",
+        "orientation": ""
+    },
+    "plugin_last_settings_stocks": {
+        "title": "",
+        "tickers": "",
+        "fontSize": "normal",
+        "darkMode": "off",
+        "autoRefresh": "0",
+        "reduceWhenClosed": "false"
+    },
+    "stocks_saved_tickers": [
+        {
+            "symbol": "AAPL",
+            "name": "\u82f9\u679c"
+        },
+        {
+            "symbol": "SPCX",
+            "name": "\u592a\u7a7a\u63a2\u7d22\u6280\u672f"
+        }
+    ],
+    "stocks_plugin_settings": {
+        "autoRefresh": "0",
+        "fontSize": "normal",
+        "title": "",
+        "darkMode": "on",
+        "reduceWhenClosed": "false"
     }
 }

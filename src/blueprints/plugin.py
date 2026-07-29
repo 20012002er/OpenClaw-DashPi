@@ -447,19 +447,26 @@ def add_ticker():
     if len(saved_tickers) >= 6:
         return jsonify({"error": "Maximum 6 tickers allowed", "tickers": saved_tickers}), 400
 
-    # Validate ticker using yfinance (with timeout to prevent Flask thread hang)
+    # Validate ticker using akshare (accessible from mainland China; yfinance
+    # is blocked because Yahoo Finance is unavailable in mainland China since
+    # 2021). We use stock_individual_basic_info_us_xq() for fast single-ticker
+    # validation (~0.5s) instead of stock_us_spot_em() which downloads all
+    # ~13k US stocks and takes 2-3 minutes (causing browser fetch timeouts).
     try:
-        import yfinance as yf
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-        stock = yf.Ticker(ticker)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(lambda: stock.info)
-            info = future.result(timeout=15)
+        import akshare as ak
+        from datetime import datetime as _dt, timedelta as _td
+        from plugins.stocks.stocks import _fetch_us_hist_with_prefix, _fetch_us_stock_name
 
-        # Check if we got valid data
-        name = info.get("shortName") or info.get("longName")
-        if not name or info.get("regularMarketPrice") is None and info.get("currentPrice") is None:
+        # First, verify the ticker exists by fetching a few days of history
+        end_date = _dt.now().strftime('%Y%m%d')
+        start_date = (_dt.now() - _td(days=7)).strftime('%Y%m%d')
+        hist = _fetch_us_hist_with_prefix(ak, ticker, start_date, end_date)
+
+        if hist is None or len(hist) == 0:
             return jsonify({"error": f"'{ticker}' is not a valid ticker symbol"}), 400
+
+        # Fetch display name
+        name = _fetch_us_stock_name(ak, ticker) or ticker
 
         # Store as object with symbol and name
         ticker_obj = {"symbol": ticker, "name": name}
