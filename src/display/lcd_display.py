@@ -63,10 +63,15 @@ class LcdDisplay(AbstractDisplay):
 
         logger.info("Displaying image to LCD framebuffer.")
 
-        # Ensure framebuffer is unblanked before writing — on Pi 4 with fkms,
-        # fb0 may be left in FB_BLANK_POWERDOWN (4) after boot without a
-        # desktop session, which would prevent the written image from showing.
-        self.unblank_display()
+        # Only unblank if the framebuffer is currently blanked — avoids
+        # triggering console/tty activity on every refresh (which causes
+        # screen flicker). consoleblank=0 in cmdline.txt prevents auto-blank.
+        try:
+            with open(self.FB_BLANK) as f:
+                if f.read().strip() != '0':
+                    self.unblank_display()
+        except OSError:
+            pass
 
         if self.bpp == 32:
             fb_bytes = self._convert_bgra(image)
@@ -86,10 +91,10 @@ class LcdDisplay(AbstractDisplay):
 
     def unblank_display(self):
         """Restore the display backlight by unblanking the framebuffer."""
-        # Disable console blanking to prevent kernel from re-blanking
-        with open('/dev/tty1', 'wb') as tty:
-            tty.write(b'\033[9;0]')  # setterm blank 0
-            tty.write(b'\033[13]')   # unblank console
+        # consoleblank=0 in /boot/firmware/cmdline.txt permanently disables
+        # kernel auto-blanking, so we only need to clear the fb blank flag.
+        # Writing to /dev/tty1 is avoided — it triggers console refresh and
+        # causes screen flicker on BCM2708 FB.
         with open(self.FB_BLANK, 'w') as f:
             f.write('0')
         logger.info("Display unblanked (backlight on)")

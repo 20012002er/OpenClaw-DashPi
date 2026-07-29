@@ -254,8 +254,16 @@ class AIText(BasePlugin):
 
         try:
             # DeepSeek accepts the OpenAI SDK with a custom base_url.
+            # Disable thinking mode for this short-text-generation use case:
+            # V4 models default to thinking mode, which emits reasoning_content
+            # and can leave `content` empty when the reasoning exhausts the
+            # token budget. Non-thinking mode returns the answer directly in
+            # `content` and is faster.
             ai_client = OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
-            return self._fetch_openai_text(ai_client, text_model, text_prompt)
+            return self._fetch_openai_text(
+                ai_client, text_model, text_prompt,
+                extra_body={"thinking": {"type": "disabled"}},
+            )
         except RuntimeError:
             raise
         except Exception as e:
@@ -271,9 +279,15 @@ class AIText(BasePlugin):
             else:
                 raise RuntimeError(f"DeepSeek error: {error_msg[:100]}")
 
-    def _fetch_openai_text(self, ai_client, model, text_prompt):
-        """Fetch text response from OpenAI."""
-        logger.info(f"Getting text response from OpenAI, model: {model}")
+    def _fetch_openai_text(self, ai_client, model, text_prompt, extra_body=None):
+        """Fetch text response from an OpenAI-compatible chat completions API.
+
+        Handles both OpenAI and DeepSeek. For DeepSeek V4 reasoning models the
+        final answer lives in `content` while the chain-of-thought is exposed
+        via `reasoning_content`; we fall back to the latter if `content` is
+        empty so the display is never blank.
+        """
+        logger.info(f"Getting text response, model: {model}")
 
         system_content = (
             "You are a highly intelligent text generation assistant. Generate concise, "
@@ -287,15 +301,37 @@ class AIText(BasePlugin):
             f"For context, today is {datetime.today().strftime('%Y-%m-%d')}"
         )
 
-        response = ai_client.chat.completions.create(
-            model=model,
-            messages=[
+        request_kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": text_prompt}
             ],
-            temperature=1
-        )
+            "temperature": 1,
+            # Reasoning models (e.g. DeepSeek V4 in thinking mode) can consume
+            # the default token budget on chain-of-thought, leaving `content`
+            # empty. 2048 comfortably covers the 70-word target plus reasoning.
+            "max_tokens": 2048,
+        }
+        if extra_body:
+            request_kwargs["extra_body"] = extra_body
 
-        result = response.choices[0].message.content.strip()
+        response = ai_client.chat.completions.create(**request_kwargs)
+
+        message = response.choices[0].message
+        result = (message.content or "").strip()
+
+        if not result:
+            # DeepSeek reasoning models expose the chain-of-thought via
+            # reasoning_content; use it as a fallback so the display is
+            # never blank.
+            reasoning = getattr(message, "reasoning_content", None)
+            if reasoning:
+                logger.warning("Empty content, falling back to reasoning_content")
+                result = reasoning.strip()
+
+        if not result:
+            raise RuntimeError("AI model returned an empty response.")
+
         logger.info(f"Generated text response: {result[:100]}...")
         return result
