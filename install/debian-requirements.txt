@@ -14,3 +14,5 @@ swig
 liblgpio-dev
 libheif-dev
 jq
+bluez
+pi-bluetooth

@@ -1,7 +1,7 @@
 [Unit]
 Description=DashPi App
-After=dashpi-splash.service
-Wants=network-online.target
+After=dashpi-splash.service bluetooth.service
+Wants=network-online.target bluetooth.service
 
 [Service]
 User=root

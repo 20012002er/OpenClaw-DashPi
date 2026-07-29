@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", message=".*Busy Wait: Held high.*")
 
 from utils.app_utils import generate_startup_image
 from utils.wifi_manager import WifiManager
+from utils.bluetooth_manager import BluetoothManager
 from flask import Flask
 from config import Config
 from display.display_manager import DisplayManager
@@ -30,6 +31,7 @@ from blueprints.plugin import plugin_bp
 from blueprints.apikeys import apikeys_bp
 from blueprints.loops import loops_bp
 from blueprints.wifi import wifi_bp
+from blueprints.bluetooth import bluetooth_bp
 from jinja2 import ChoiceLoader, FileSystemLoader
 from plugins.plugin_registry import load_plugins
 from waitress import serve
@@ -64,6 +66,7 @@ app.jinja_loader = ChoiceLoader([FileSystemLoader(directory) for directory in te
 device_config = Config()
 display_manager = DisplayManager(device_config)
 wifi_manager = WifiManager()
+bluetooth_manager = BluetoothManager()
 refresh_task = RefreshTask(device_config, display_manager, wifi_manager)
 
 load_plugins(device_config.get_plugins())
@@ -82,6 +85,7 @@ app.config['DEVICE_CONFIG'] = device_config
 app.config['DISPLAY_MANAGER'] = display_manager
 app.config['REFRESH_TASK'] = refresh_task
 app.config['WIFI_MANAGER'] = wifi_manager
+app.config['BLUETOOTH_MANAGER'] = bluetooth_manager
 
 # Set additional parameters
 app.config['MAX_FORM_PARTS'] = 10_000
@@ -93,6 +97,7 @@ app.register_blueprint(plugin_bp)
 app.register_blueprint(apikeys_bp)
 app.register_blueprint(loops_bp)
 app.register_blueprint(wifi_bp)
+app.register_blueprint(bluetooth_bp)
 
 # Inject project_name and version into all templates
 @app.context_processor

@@ -228,6 +228,192 @@
             }
         }
 
+        // --- Bluetooth ---
+        async function loadBluetoothStatus() {
+            try {
+                const resp = await fetch('/bluetooth/status');
+                const data = await resp.json();
+                const statusEl = document.getElementById('btAdapterStatus');
+                const powerBtn = document.getElementById('btPowerBtn');
+                const scanBtn = document.getElementById('btScanBtn');
+                if (!data.available) {
+                    statusEl.innerHTML = '<span style="opacity: 0.7;">Bluetooth adapter not available</span>';
+                    powerBtn.style.display = 'none';
+                    scanBtn.style.display = 'none';
+                    renderBtConnected([]);
+                    return;
+                }
+                if (data.powered) {
+                    statusEl.innerHTML = 'Adapter: <strong>On</strong>' +
+                        (data.address ? ` <span style="opacity:0.6;">(${data.address})</span>` : '');
+                    powerBtn.textContent = 'Power Off';
+                    powerBtn.onclick = () => setBtPower(false);
+                    scanBtn.style.display = '';
+                } else {
+                    statusEl.innerHTML = '<span style="opacity: 0.7;">Adapter: Off</span>';
+                    powerBtn.textContent = 'Power On';
+                    powerBtn.onclick = () => setBtPower(true);
+                    scanBtn.style.display = 'none';
+                }
+                renderBtConnected(data.connected || []);
+            } catch (e) {
+                document.getElementById('btAdapterStatus').innerHTML =
+                    '<span style="opacity: 0.7;">Failed to load Bluetooth status</span>';
+            }
+        }
+
+        async function setBtPower(on) {
+            try {
+                const resp = await fetch('/bluetooth/power', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ on: on })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showResponseModal('success', data.message);
+                } else {
+                    showResponseModal('failure', data.error || 'Failed to change adapter power');
+                }
+            } catch (e) {
+                showResponseModal('failure', 'Request failed');
+            } finally {
+                loadBluetoothStatus();
+            }
+        }
+
+        function renderBtConnected(devices) {
+            const list = document.getElementById('btConnectedList');
+            if (!devices || devices.length === 0) {
+                list.innerHTML = '<span style="opacity: 0.6;">No devices connected</span>';
+                return;
+            }
+            list.innerHTML = devices.map(d => {
+                const name = d.name || d.mac;
+                const icon = d.icon === 'audio-card' || d.icon === 'audio-input-microphone' ? '🎧' : '📱';
+                return `<div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border-color);">
+                    <span>${icon}</span>
+                    <span style="flex:1;"><strong>${escapeHtml(name)}</strong>
+                        <span style="opacity:0.5; font-size:0.85em;">${d.mac}</span></span>
+                    <button type="button" class="header-button" style="background-color:#E53935; color:#fff;"
+                        onclick="disconnectBt('${d.mac}')">Disconnect</button>
+                </div>`;
+            }).join('');
+        }
+
+        async function disconnectBt(mac) {
+            if (!confirm(`Disconnect ${mac}?`)) return;
+            try {
+                const resp = await fetch('/bluetooth/disconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showResponseModal('success', data.message);
+                } else {
+                    showResponseModal('failure', data.error || 'Disconnect failed');
+                }
+            } catch (e) {
+                showResponseModal('failure', 'Request failed');
+            } finally {
+                loadBluetoothStatus();
+                // Refresh scan list if visible
+                if (document.getElementById('btScanForm').style.display !== 'none') {
+                    scanBluetooth();
+                }
+            }
+        }
+
+        async function toggleBtScanForm() {
+            const form = document.getElementById('btScanForm');
+            if (form.style.display === 'none') {
+                form.style.display = 'block';
+                await scanBluetooth();
+            } else {
+                form.style.display = 'none';
+            }
+        }
+
+        async function scanBluetooth() {
+            const list = document.getElementById('btDeviceList');
+            const scanBtn = document.getElementById('btScanBtn');
+            list.innerHTML = '<div style="opacity:0.6; padding:8px;">Scanning for devices (this takes ~10 seconds)...</div>';
+            scanBtn.disabled = true;
+            scanBtn.textContent = 'Scanning...';
+            try {
+                const resp = await fetch('/bluetooth/scan?timeout=10');
+                const data = await resp.json();
+                renderBtScanResults(data.devices || []);
+            } catch (e) {
+                list.innerHTML = '<div style="opacity:0.6; padding:8px;">Scan failed</div>';
+            } finally {
+                scanBtn.disabled = false;
+                scanBtn.textContent = 'Scan';
+            }
+        }
+
+        function renderBtScanResults(devices) {
+            const list = document.getElementById('btDeviceList');
+            if (!devices || devices.length === 0) {
+                list.innerHTML = '<div style="opacity:0.6; padding:8px;">No devices found. Make sure your device is in pairing mode.</div>';
+                return;
+            }
+            list.innerHTML = devices.map(d => {
+                const name = d.name || d.mac;
+                const icon = '📱';
+                let btn;
+                if (d.connected) {
+                    btn = `<button type="button" class="header-button" style="background-color:#E53935; color:#fff;"
+                        onclick="disconnectBt('${d.mac}')">Disconnect</button>`;
+                } else {
+                    btn = `<button type="button" class="header-button" style="background-color:#1abc9c; color:#fff;"
+                        onclick="connectBt('${d.mac}')">Connect</button>`;
+                }
+                const badges = [];
+                if (d.paired) badges.push('<span style="font-size:0.75em; opacity:0.6;">paired</span>');
+                if (d.connected) badges.push('<span style="font-size:0.75em; opacity:0.6;">connected</span>');
+                return `<div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border-color);">
+                    <span>${icon}</span>
+                    <span style="flex:1;"><strong>${escapeHtml(name)}</strong>
+                        <span style="opacity:0.5; font-size:0.85em;">${d.mac}</span>
+                        ${badges.length ? '<br>' + badges.join(' · ') : ''}</span>
+                    ${btn}
+                </div>`;
+            }).join('');
+        }
+
+        async function connectBt(mac) {
+            showResponseModal('success', `Connecting to ${mac}...\nThis may take a few seconds.`);
+            try {
+                const resp = await fetch('/bluetooth/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showResponseModal('success', data.message);
+                } else {
+                    showResponseModal('failure', data.error || 'Connection failed');
+                }
+            } catch (e) {
+                showResponseModal('failure', 'Request failed');
+            } finally {
+                loadBluetoothStatus();
+                if (document.getElementById('btScanForm').style.display !== 'none') {
+                    scanBluetooth();
+                }
+            }
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
         async function handleShutdown(reboot) {
             if (reboot) {
                 showResponseModal('success', 'The system is rebooting. The UI will be unavailable until the reboot is complete.');
@@ -280,7 +466,7 @@
         }
     </script>
 </head>
-<body>
+<body onload="loadBluetoothStatus()">
     <div class="frame">
         <header class="header">
             <div style="display: flex; align-items: center; gap: 12px;">
@@ -540,6 +726,40 @@
                             style="background-color: #1abc9c; color: #fff;">Connect</button>
                     <button type="button" class="header-button" onclick="scanWifiNetworks()">Rescan</button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Bluetooth Section -->
+        <div class="separator"></div>
+        <div class="form-group" style="padding: 0 16px;">
+            <label class="form-label" style="font-size: 1.1em; font-weight: bold;">Bluetooth</label>
+            <div id="btAdapterStatus" style="margin-top: 4px; opacity: 0.8;">Loading...</div>
+
+            <!-- Connected devices -->
+            <div style="margin-top: 8px;">
+                <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 4px;">Connected Devices</div>
+                <div id="btConnectedList"></div>
+            </div>
+
+            <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">
+                <button type="button" class="header-button" id="btPowerBtn"
+                        onclick="setBtPower(true)">Power On</button>
+                <button type="button" class="header-button" id="btScanBtn"
+                        style="background-color: #2c66b1; color: #fff;"
+                        onclick="toggleBtScanForm()">Add Device</button>
+            </div>
+
+            <!-- Inline scan/connect form -->
+            <div id="btScanForm" style="display: none; margin-top: 12px; padding: 12px; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border-color);">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-weight: bold;">Available Devices</span>
+                    <button type="button" class="header-button" id="btScanBtn2"
+                            onclick="scanBluetooth()">Scan</button>
+                </div>
+                <div id="btDeviceList"></div>
+                <span class="form-hint" style="font-size: 0.8em; opacity: 0.7; margin-top: 8px; display: block;">
+                    Put your device in pairing mode, then click Scan. Connecting may take a few seconds.
+                </span>
             </div>
         </div>
 
