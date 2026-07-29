@@ -164,14 +164,43 @@ class BluetoothManager:
         if name_m:
             name = name_m.group(1).strip()
 
+        icon = _extract_field(output, "Icon")
+        uuids = re.findall(r"\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)", output)
+        # BlueZ doesn't always populate `Icon` for classic (BR/EDR) audio
+        # devices like Bluetooth speakers. Fall back to inferring the icon
+        # from SDP UUIDs: A2DP Audio Sink (0000110b-...) / HSP/HFP.
+        if not icon and uuids:
+            audio_sink_uuid = "0000110b-0000-1000-8000-00805f9b34fb"
+            hsp_hs_uuid = "00001108-0000-1000-8000-00805f9b34fb"
+            hfp_hf_uuid = "0000111e-0000-1000-8000-00805f9b34fb"
+            if audio_sink_uuid in uuids or hsp_hs_uuid in uuids or hfp_hf_uuid in uuids:
+                icon = "audio-card"
+
         return {
             "mac": mac,
             "name": name,
             "paired": "Paired: yes" in output,
             "connected": "Connected: yes" in output,
             "trusted": "Trusted: yes" in output,
-            "icon": _extract_field(output, "Icon"),
+            "icon": icon,
+            "uuids": uuids,
         }
+
+    def _bluetoothctl_devices(self):
+        """Return a {mac: name} dict of all devices known to the adapter.
+
+        Uses `bluetoothctl devices` (no filter), which lists every device the
+        adapter has discovered/paired — with human-readable names.
+        """
+        if not self._is_pi:
+            return {}
+        success, output = _run_bluetoothctl(["devices"], timeout=5)
+        if not success:
+            return {}
+        result = {}
+        for dev in self._parse_devices(output):
+            result[dev["mac"]] = dev["name"]
+        return result
 
     # ------------------------------------------------------------------
     # Scanning
@@ -189,54 +218,47 @@ class BluetoothManager:
         if not self._is_pi:
             return []
 
-        # `bluetoothctl scan on` blocks until stopped. Run it as a background
-        # process, let it collect device discoveries, then terminate and read
-        # the buffered output.
+        # `bluetoothctl --timeout N scan on` runs a non-interactive scan that
+        # self-terminates after N seconds. This is the reliable form — piping
+        # `scan on` into an interactive `bluetoothctl` via stdin does NOT work
+        # when stdin is a pipe (non-tty): the command is silently ignored.
         try:
-            proc = subprocess.Popen(
-                ["bluetoothctl"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+            result = subprocess.run(
+                ["bluetoothctl", "--timeout", str(timeout), "scan", "on"],
+                capture_output=True,
                 text=True,
+                timeout=timeout + 5,
             )
         except FileNotFoundError:
             logger.error("bluetoothctl not found — BlueZ not installed")
             return []
-
-        try:
-            proc.stdin.write("scan on\n")
-            proc.stdin.flush()
-        except (BrokenPipeError, OSError):
-            pass
-
-        try:
-            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # Expected — stop the scan and read what we captured
-            try:
-                proc.stdin.write("scan off\nquit\n")
-                proc.stdin.flush()
-            except (BrokenPipeError, OSError):
-                pass
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=2)
+            logger.warning("bluetoothctl scan timed out")
+            return []
 
-        output = proc.stdout.read() if proc.stdout else ""
+        output = (result.stdout or "") + (result.stderr or "")
 
-        # Collect all unique devices seen during the scan output
-        seen = {}
+        # Collect MACs of devices seen during the scan. We only extract the
+        # MAC here (from any `[NEW]` or `[CHG]` Device line); names come from
+        # `bluetoothctl devices` afterwards, which returns the adapter's full
+        # known-device list with human-readable names.
+        seen_macs = set()
         for line in output.splitlines():
-            line = line.strip()
-            m = re.match(r"Device\s+([0-9A-Fa-f:]{17})\s*(.*)", line)
+            m = re.search(r"Device\s+([0-9A-Fa-f:]{17})", line)
             if m:
-                mac = m.group(1)
-                name = m.group(2).strip() or mac
-                if mac not in seen:
-                    seen[mac] = {"mac": mac, "name": name}
+                seen_macs.add(m.group(1))
+
+        # Query the adapter for the full known device list (name + MAC).
+        # Devices that were already known before this scan (but didn't
+        # broadcast in the window) still appear here.
+        known = self._bluetoothctl_devices()
+
+        # Scan-discovered MACs that aren't in the known list (rare: a device
+        # seen during scan but not yet "added" by bluetoothctl) get a MAC
+        # placeholder name.
+        seen = {}
+        for mac in seen_macs:
+            seen[mac] = {"mac": mac, "name": known.get(mac, mac)}
 
         # If the scan found nothing new, fall back to the paired device list
         # (the adapter may already know devices that didn't broadcast during
