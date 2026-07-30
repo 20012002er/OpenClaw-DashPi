@@ -26,6 +26,8 @@ SRC_DIR = os.path.dirname(os.path.dirname(PLUGIN_DIR))
 PROFILE_DIR = os.path.join(SRC_DIR, "static", "spotify_profile")
 # Process state file — written by /start endpoint, read by /status endpoint.
 STATE_FILE = os.path.join(PROFILE_DIR, "kiosk_state.json")
+# Capture subprocess stderr so kiosk crashes are diagnosable instead of black-box.
+KIOSK_LOG = os.path.join(SRC_DIR, "static", "logs", "spotify_kiosk.log")
 
 SPOTIFY_URL = "https://open.spotify.com/"
 DISPLAY = ":0"
@@ -127,14 +129,27 @@ class SpotifyWeb(BasePlugin):
 
     @staticmethod
     def _pid_alive(pid):
-        """Return True if a process with the given PID is currently running."""
+        """Return True if a process with the given PID is currently running.
+
+        Uses /proc/<pid>/status to distinguish live processes from zombies
+        (<defunct>): os.kill(pid, 0) returns success for zombies too, which
+        previously caused is_running() to report a dead chromium as alive.
+        """
         if not pid:
             return False
         try:
             os.kill(pid, 0)
-            return True
         except (OSError, ProcessLookupError):
             return False
+        # Distinguish zombie (state 'Z') from actually-running processes.
+        try:
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    if line.startswith("State:") and "Z" in line.split()[1]:
+                        return False
+        except Exception:
+            pass
+        return True
 
     def is_running(self):
         """Return True if the kiosk (Xorg or Chromium) is currently running."""
@@ -230,6 +245,25 @@ class SpotifyWeb(BasePlugin):
             logger.error("Failed to clear Spotify profile: %s", e)
             return False, f"Failed to clear profile: {e}"
 
+    def _open_kiosk_log(self):
+        """Open (append) the kiosk stderr log file. Returns a file object or DEVNULL.
+
+        The parent dir is created on demand. The file is opened in append mode
+        so each start adds a new entry; a timestamp header line is written so
+        multiple runs are distinguishable.
+        """
+        try:
+            os.makedirs(os.path.dirname(KIOSK_LOG), exist_ok=True)
+            fh = open(KIOSK_LOG, "a")
+            fh.write("\n" + "=" * 70 + "\n")
+            fh.write(f"kiosk start at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            fh.write("=" * 70 + "\n")
+            fh.flush()
+            return fh
+        except Exception as e:
+            logger.warning("Could not open kiosk log %s: %s", KIOSK_LOG, e)
+            return subprocess.DEVNULL
+
     def _find_chrome_binary(self):
         """Locate a Chromium/Chrome binary on the current platform.
 
@@ -276,6 +310,8 @@ class SpotifyWeb(BasePlugin):
 
         # On Pi only: route audio to bluetooth + blank framebuffer + start Xorg
         xorg_pid = None
+        x_proc = None
+        kiosk_log = self._open_kiosk_log()
         if _is_pi():
             self._route_audio_to_bluetooth()
             try:
@@ -284,9 +320,17 @@ class SpotifyWeb(BasePlugin):
             except Exception as e:
                 logger.warning("Could not blank framebuffer before Xorg: %s", e)
             try:
+                # xinit syntax: xinit <client> -- <server args>.
+                # We must pass a client, otherwise xinit tries to run xterm
+                # (not installed on Pi kiosk) and exits immediately, taking
+                # the X server down with it. `/usr/bin/sleep infinity` is a
+                # harmless placeholder that keeps the X server alive until we
+                # kill it. Full path is required because systemd services run
+                # with a minimal PATH that xinit does not search for clients.
                 x_proc = subprocess.Popen(
-                    ["xinit", "--", DISPLAY, "-nocursor", "-nolisten", "tcp"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    ["xinit", "/usr/bin/sleep", "infinity", "--",
+                     DISPLAY, "-nocursor", "-nolisten", "tcp"],
+                    stdout=kiosk_log, stderr=kiosk_log,
                     env={**os.environ, "DISPLAY": DISPLAY},
                 )
                 xorg_pid = x_proc.pid
@@ -296,7 +340,8 @@ class SpotifyWeb(BasePlugin):
                 return False, f"Failed to start Xorg: {e}"
             time.sleep(2)
             if not self._pid_alive(xorg_pid):
-                return False, "Xorg exited immediately — check /var/log/Xorg.0.log"
+                return False, ("Xorg exited immediately — see "
+                               f"{KIOSK_LOG} or ~/.local/share/xorg/Xorg.0.log")
 
         # Build kiosk command (cross-platform). On Mac we use --app=URL for
         # a borderless window (true --kiosk is too aggressive on desktop);
@@ -337,7 +382,7 @@ class SpotifyWeb(BasePlugin):
         try:
             chrome_proc = subprocess.Popen(
                 chrome_cmd,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=kiosk_log, stderr=kiosk_log,
                 env={**os.environ, "DISPLAY": DISPLAY} if _is_pi() else os.environ,
             )
         except Exception as e:
@@ -347,6 +392,27 @@ class SpotifyWeb(BasePlugin):
                 except Exception:
                     pass
             return False, f"Failed to start Chromium: {e}"
+
+        # Give chromium a moment, then check it hasn't already crashed.
+        # Chromium exits immediately on missing libs, sandbox issues, GPU
+        # failures, etc. — catching that here turns a "black screen" into
+        # a useful error message and reads the crash reason from the log.
+        time.sleep(3)
+        if chrome_proc.poll() is not None:
+            try:
+                kiosk_log.flush()
+                with open(KIOSK_LOG) as f:
+                    tail = f.read()[-2000:]
+            except Exception:
+                tail = "(could not read kiosk log)"
+            if xorg_pid:
+                try:
+                    os.kill(xorg_pid, 15)
+                except Exception:
+                    pass
+            return False, (f"Chromium exited immediately (code="
+                           f"{chrome_proc.returncode}). Tail of {KIOSK_LOG}:\n"
+                           f"{tail}")
 
         self._write_state(xorg_pid, chrome_proc.pid)
         logger.info("Spotify kiosk started: xorg=%s chromium=%d",

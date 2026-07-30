@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from utils.app_utils import sanitize_filename
 import os
 import subprocess
+import time
 import pytz
 import logging
 import io
@@ -138,6 +139,230 @@ def shutdown():
         logger.error(f"Shutdown/reboot failed: {e}")
         return jsonify({"error": "Failed to execute shutdown command"}), 500
     return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Display mode switching — toggle the 7" screen between DashPi content
+# (framebuffer) and the Raspberry Pi desktop (X session via xinit).
+#
+# DashPi writes images directly to /dev/fb0. The desktop runs on top of an
+# X server. Because both compete for the same physical display, switching
+# modes means:
+#   - desktop: blank fb0 so DashPi's writes are invisible, then launch Xorg
+#     with the Raspberry Pi Desktop (lxsession) via xinit. The X server
+#     takes over the display output.
+#   - dashpi:  kill the X server/lxsession, unblank fb0, then trigger a
+#     manual refresh so the current plugin image is redrawn.
+# The DashPi service itself keeps running in both modes (web UI + refresh
+# task stay alive); only the on-screen content changes.
+#
+# We use xinit instead of lightdm because `systemctl start lightdm` blocks
+# indefinitely when called from inside a systemd service (D-Bus/polkit
+# policy), whereas xinit spawns Xorg directly and returns immediately.
+# ---------------------------------------------------------------------------
+
+# State file recording the current display mode so the UI can reflect it.
+DISPLAY_MODE_FILE = "/tmp/dashpi_display_mode"
+# Capture Xorg/lxsession stderr so desktop launch failures are diagnosable.
+DESKTOP_LOG = "/tmp/dashpi_desktop.log"
+# X display used by the desktop session. DashPi itself does not use X.
+DISPLAY = ":0"
+# The lxsession session to launch — rpd-x is the Raspberry Pi Desktop on X.
+LXSESSION_CMD = ["/usr/bin/lxsession", "-s", "rpd-x", "-e", "LXDE"]
+
+def _is_pi():
+    """Return True if running on a Raspberry Pi."""
+    return os.path.exists("/proc/device-tree/model")
+
+def _write_display_mode(mode):
+    """Persist the current display mode ('dashpi' or 'desktop') to a tmp file."""
+    try:
+        with open(DISPLAY_MODE_FILE, "w") as f:
+            f.write(mode)
+    except Exception as e:
+        logger.warning("Could not write display mode file: %s", e)
+
+def _read_display_mode():
+    """Return the persisted display mode, defaulting to 'dashpi'."""
+    try:
+        with open(DISPLAY_MODE_FILE) as f:
+            mode = f.read().strip()
+            if mode in ("dashpi", "desktop"):
+                return mode
+    except Exception:
+        pass
+    return "dashpi"
+
+def _stop_desktop_session():
+    """Kill any running Xorg / lxsession / xinit processes.
+
+    Idempotent — safe to call when nothing is running. Kills lxsession and
+    xinit first (the clients) so the X server tears down cleanly, then
+    force-kills any lingering Xorg.
+    """
+    for pattern in ["lxsession", "lxpanel", "pcmanfm", "openbox", "xinit"]:
+        try:
+            subprocess.run(["pkill", "-f", pattern],
+                           capture_output=True, timeout=3)
+        except Exception:
+            pass
+    # Xorg may linger after xinit exits; give it a moment then force-kill.
+    time.sleep(1)
+    try:
+        subprocess.run(["pkill", "-9", "-f", "Xorg"],
+                       capture_output=True, timeout=3)
+    except Exception:
+        pass
+    # Remove stale X lock files so a subsequent xinit can claim display :0.
+    for lock in ("/tmp/.X0-lock", "/tmp/.X11-unix/X0"):
+        try:
+            os.remove(lock)
+        except OSError:
+            pass
+
+def _queue_refresh_after_restore():
+    """Fallback: queue a forced manual refresh to redraw the current plugin.
+
+    Used when directly restoring current_image.png to the display fails —
+    the refresh task will regenerate the image and write it to fb0. Note
+    this may be skipped by the refresh task if the image hash is unchanged,
+    which is why the direct display_image() path in set_display_mode() is
+    preferred.
+    """
+    refresh_task = current_app.config.get('REFRESH_TASK')
+    if refresh_task and refresh_task.running:
+        from refresh_task import LoopRefresh
+        device_config = current_app.config['DEVICE_CONFIG']
+        loop_manager = device_config.get_loop_manager()
+        loop = loop_manager.determine_active_loop(datetime.now())
+        if loop and loop.plugin_order:
+            plugin_ref = loop.get_next_plugin()
+            refresh_action = LoopRefresh(loop, plugin_ref, force=True)
+            refresh_task.queue_manual_update(refresh_action)
+            logger.info("Queued manual refresh after switching to dashpi mode")
+
+@settings_bp.route('/api/display/mode', methods=['GET'])
+def get_display_mode():
+    """Return the current display mode: 'dashpi' or 'desktop'."""
+    return jsonify({"mode": _read_display_mode()})
+
+@settings_bp.route('/api/display/mode', methods=['POST'])
+def set_display_mode():
+    """Switch the 7\" screen between DashPi content and the Pi desktop.
+
+    Body: {"mode": "dashpi" | "desktop"}.
+    - "desktop": blank the framebuffer and launch Xorg + lxsession (rpd-x
+                 Raspberry Pi Desktop) via xinit.
+    - "dashpi":  kill the X session, unblank the framebuffer, and trigger a
+                 manual refresh so the current plugin image is redrawn.
+    The DashPi service keeps running in both modes.
+    """
+    data = request.get_json() or {}
+    mode = data.get("mode")
+    if mode not in ("dashpi", "desktop"):
+        return jsonify({"error": "mode must be 'dashpi' or 'desktop'"}), 400
+
+    if not _is_pi():
+        return jsonify({"error": "Display switching is only available on the Raspberry Pi"}), 400
+
+    try:
+        if mode == "desktop":
+            # If a desktop session is already running, do nothing.
+            if _read_display_mode() == "desktop":
+                return jsonify({"success": True, "mode": "desktop",
+                                "message": "Desktop already running"})
+            # Blank fb0 so DashPi's periodic framebuffer writes don't show on
+            # screen while the X session owns the display.
+            try:
+                with open("/sys/class/graphics/fb0/blank", "w") as f:
+                    f.write("1")
+            except Exception as e:
+                logger.warning("Could not blank framebuffer: %s", e)
+            # Launch Xorg + lxsession via xinit. We redirect stdout/stderr to
+            # a log file for diagnosability. The Popen returns immediately;
+            # the desktop runs in the background as a child process.
+            log_fd = open(DESKTOP_LOG, "ab")
+            try:
+                env = {
+                    **os.environ,
+                    "HOME": "/home/lazybeartoby",
+                    "USER": "lazybeartoby",
+                    "DISPLAY": DISPLAY,
+                    "LANG": "en_GB.UTF-8",
+                }
+                # xinit syntax: xinit <client_path> <client_args> -- <server_args>.
+                # We pass lxsession + its args as the client; Xorg args follow --.
+                subprocess.Popen(
+                    ["xinit"] + LXSESSION_CMD + ["--", DISPLAY,
+                     "-nocursor", "-nolisten", "tcp"],
+                    stdout=log_fd, stderr=log_fd, env=env,
+                )
+            except Exception as e:
+                log_fd.close()
+                return jsonify({"error": f"Failed to start desktop: {e}"}), 500
+            # Give Xorg a moment to come up, then verify it's running.
+            time.sleep(3)
+            try:
+                check = subprocess.run(["pgrep", "-x", "Xorg"],
+                                       capture_output=True, timeout=3)
+                xorg_running = check.returncode == 0
+            except Exception:
+                xorg_running = True  # assume ok if pgrep fails
+            if not xorg_running:
+                _write_display_mode("dashpi")
+                try:
+                    with open("/sys/class/graphics/fb0/blank", "w") as f:
+                        f.write("0")
+                except Exception:
+                    pass
+                return jsonify({"error": "Xorg failed to start — see " + DESKTOP_LOG}), 500
+            _write_display_mode("desktop")
+            logger.info("Display switched to desktop mode (xinit + lxsession started)")
+            return jsonify({"success": True, "mode": "desktop"})
+
+        # mode == "dashpi": tear down the X session and restore framebuffer.
+        _stop_desktop_session()
+        # Unblank fb0 so framebuffer writes reach the screen again.
+        try:
+            with open("/sys/class/graphics/fb0/blank", "w") as f:
+                f.write("0")
+        except Exception as e:
+            logger.warning("Could not unblank framebuffer: %s", e)
+        _write_display_mode("dashpi")
+        logger.info("Display switched to dashpi mode (X session stopped)")
+
+        # Force-rewrite the last plugin image to fb0. We cannot rely on the
+        # refresh_task's queue_manual_update() here because it skips the
+        # actual display write when the image hash is unchanged — and while
+        # the X session was running, fb0's content was clobbered by Xorg, so
+        # the screen is currently black/blank even though dashpi thinks the
+        # image is "already displayed". Reading current_image.png (which the
+        # refresh task keeps updated) and pushing it directly to the display
+        # guarantees the on-screen content is restored immediately.
+        display_manager = current_app.config.get('DISPLAY_MANAGER')
+        device_config = current_app.config['DEVICE_CONFIG']
+        if display_manager and device_config:
+            try:
+                from PIL import Image
+                current_image_path = device_config.current_image_file
+                if os.path.exists(current_image_path):
+                    img = Image.open(current_image_path)
+                    img.load()
+                    display_manager.display_image(img)
+                    logger.info("Restored current image to display after switching to dashpi mode")
+                else:
+                    logger.warning("current_image.png not found at %s, queuing refresh", current_image_path)
+                    _queue_refresh_after_restore()
+            except Exception as e:
+                logger.warning("Failed to restore current image directly, falling back to refresh: %s", e)
+                _queue_refresh_after_restore()
+        return jsonify({"success": True, "mode": "dashpi"})
+    except subprocess.SubprocessError as e:
+        logger.error("Display mode switch failed: %s", e)
+        return jsonify({"error": f"Failed to switch display mode: {e}"}), 500
+    except Exception as e:
+        logger.exception("Unexpected error switching display mode")
+        return jsonify({"error": str(e)}), 500
 
 @settings_bp.route('/api/update/check', methods=['GET'])
 def check_for_updates():

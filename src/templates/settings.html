@@ -431,6 +431,53 @@
             });
         }
 
+        // Display mode switching — toggle the 7" screen between DashPi
+        // content (framebuffer images) and the Raspberry Pi desktop (X
+        // session via lightdm). The DashPi service keeps running in both
+        // modes, so the web UI stays available either way.
+        function _updateDisplayModeButtons(mode) {
+            const dashpiBtn = document.getElementById('displayDashpiBtn');
+            const desktopBtn = document.getElementById('displayDesktopBtn');
+            if (!dashpiBtn || !desktopBtn) return;
+            if (mode === 'desktop') {
+                dashpiBtn.style.opacity = '0.5';
+                desktopBtn.style.opacity = '1';
+            } else {
+                dashpiBtn.style.opacity = '1';
+                desktopBtn.style.opacity = '0.5';
+            }
+        }
+
+        async function setDisplayMode(mode) {
+            const label = mode === 'desktop' ? 'desktop' : 'DashPi';
+            try {
+                const r = await fetch("{{ url_for('settings.set_display_mode') }}", {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({mode: mode})
+                });
+                const data = await r.json();
+                if (r.ok) {
+                    showResponseModal('success', `Switched the 7" display to ${label}.`);
+                    _updateDisplayModeButtons(mode);
+                } else {
+                    showResponseModal('error', data.error || `Failed to switch to ${label}.`);
+                }
+            } catch (e) {
+                showResponseModal('error', `Request failed: ${e.message}`);
+            }
+        }
+
+        async function loadDisplayMode() {
+            try {
+                const r = await fetch("{{ url_for('settings.get_display_mode') }}");
+                if (r.ok) {
+                    const data = await r.json();
+                    _updateDisplayModeButtons(data.mode);
+                }
+            } catch (e) { /* ignore — buttons keep default styling */ }
+        }
+
 
         function updateSliderValue(slider) {
             const valueDisplay = document.getElementById(`${slider.id}-value`);
@@ -479,6 +526,8 @@
             <div class="header-actions">
                 <button class="header-button" id="updateBtn" style="background-color: #28a745; color: #fff;" onclick="checkForUpdates()">Update</button>
                 <a class="header-button" style="text-decoration: none; background-color: #2c66b1; color: #fff;" href="{{ url_for('settings.download_logs', hours=24) }}" download>Download Logs</a>
+                <button class="header-button" id="displayDashpiBtn" style="background-color: #6f42c1; color: #fff;" onclick="setDisplayMode('dashpi')">Show DashPi</button>
+                <button class="header-button" id="displayDesktopBtn" style="background-color: #17a2b8; color: #fff;" onclick="setDisplayMode('desktop')">Show Desktop</button>
                 <button class="header-button" style="background-color: #FFD600; color: #333;" onclick="handleShutdown(true)">Reboot</button>
                 <button class="header-button" style="background-color: #E53935; color: #fff;" onclick="handleShutdown(false)">Shutdown</button>
             </div>
@@ -893,6 +942,9 @@
                 btn.textContent = 'Import Config';
             }
         }
+
+        // Reflect the current display mode in the button styling on load.
+        document.addEventListener('DOMContentLoaded', loadDisplayMode);
     </script>
 </body>
 </html>
